@@ -53,32 +53,44 @@ module.exports = function lint (args = {}, api, silent) {
     }
   }
 
-  const program = tslint.Linter.createProgram(api.resolve('tsconfig.json'))
-
-  // patch getSourceFile for *.vue files
-  // so that it returns the <script> block only
-  const patchProgram = program => {
-    const getSourceFile = program.getSourceFile
-    program.getSourceFile = function (file, languageVersion, onError) {
-      if (isVueFile(file)) {
-        const script = parseTSFromVueFile(file) || ''
-        return ts.createSourceFile(file, script, languageVersion, true)
-      } else {
-        return getSourceFile.call(this, file, languageVersion, onError)
+  const parseTSConfig = (configFile) => {
+    const extraExtensions = ['vue']
+    const parseConfigHost = {
+      fileExists: ts.sys.fileExists,
+      useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+      readFile: (file) => {
+        return fs.readFileSync(file, 'utf8')
+      },
+      readDirectory: (rootDir, extensions, excludes, includes, depth) => {
+        return ts.sys.readDirectory(rootDir, extensions.concat(extraExtensions), excludes, includes, depth)
       }
     }
+    const tsconfig = ts.readConfigFile(configFile, ts.sys.readFile).config
+    const parsed = ts.parseJsonConfigFileContent(tsconfig, parseConfigHost, path.dirname(configFile))
+    parsed.options.allowNonTsExtensions = true
+    parsed.options.noEmit = true
+    return parsed
   }
+  const parsedTSConfig = parseTSConfig(api.resolve('tsconfig.json'))
 
-  patchProgram(program)
-
-  const linter = new tslint.Linter(options, program)
-
-  // patch linter.updateProgram to ensure every program has correct getSourceFile
-  const updateProgram = linter.updateProgram
-  linter.updateProgram = function (...args) {
-    updateProgram.call(this, ...args)
-    patchProgram(this.program)
+  const createTSProgram = (parsedTSConfig) => {
+    const host = ts.createCompilerHost(parsedTSConfig.options)
+    const realGetSourceFile = host.getSourceFile
+    // patch getSourceFile for *.vue files
+    // so that it returns the <script> block only
+    host.getSourceFile = (filePath, languageVersion, onError) => {
+      let source = realGetSourceFile(filePath, languageVersion, onError)
+      if (isVueFile(filePath)) {
+        const script = parseTSFromVueFile(filePath) || ''
+        source = ts.createSourceFile(filePath, script, languageVersion, true)
+      }
+      return source
+    }
+    return ts.createProgram(parsedTSConfig.fileNames, parsedTSConfig.options, host)
   }
+  const tsProgram = createTSProgram(parsedTSConfig)
+
+  const linter = new tslint.Linter(options, tsProgram)
 
   const tslintConfigPath = api.resolve('tslint.json')
 
