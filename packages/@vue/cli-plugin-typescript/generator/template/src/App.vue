@@ -19,7 +19,13 @@ export default Vue.extend({
   name: 'app',
   components: {
     HelloWorld
-  }
+  },
+  methods: {
+    test() {
+      // const list: number[] = [];
+      // for (const key in list) {}
+    },
+  },
 });
 <%_ } else { _%>
 import { Component, Vue } from 'vue-property-decorator';
